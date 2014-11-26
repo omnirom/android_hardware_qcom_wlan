@@ -27,26 +27,15 @@ LOCAL_CPPFLAGS += -Wno-conversion-null
 LOCAL_C_INCLUDES += \
 	external/libnl/include \
 	$(call include-path-for, libhardware_legacy)/hardware_legacy \
-	$(TARGET_OUT_HEADERS)/libwpa_client \
-	$(TARGET_OUT_INTERMEDIATES)/KERNEL_OBJ/usr/include
+	external/wpa_supplicant_8/src/drivers
 
 LOCAL_SRC_FILES := \
 	wifi_hal.cpp \
 	common.cpp \
 	cpp_bindings.cpp \
-	gscan.cpp \
-	llstats.cpp
+	gscan.cpp 
 
 LOCAL_MODULE := libwifi-hal-qcom
-LOCAL_SHARED_LIBRARIES += libnetutils liblog
 
-ifneq ($(wildcard external/libnl),)
-LOCAL_SHARED_LIBRARIES += libnl
-LOCAL_C_INCLUDES += external/libnl/include
-else
-LOCAL_SHARED_LIBRARIES += libnl_2
-LOCAL_C_INCLUDES += external/libnl-headers
-endif
-
-include $(BUILD_SHARED_LIBRARY)
+include $(BUILD_STATIC_LIBRARY)
 
