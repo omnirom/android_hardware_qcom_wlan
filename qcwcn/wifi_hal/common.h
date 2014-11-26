@@ -1,58 +1,60 @@
+/*
+ * Copyright (C) 2014 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
 #include "wifi_hal.h"
 
 #ifndef __WIFI_HAL_COMMON_H__
 #define __WIFI_HAL_COMMON_H__
 
+#ifndef LOG_TAG
 #define LOG_TAG  "WifiHAL"
+#endif
+
+#include <stdint.h>
+#include <fcntl.h>
+#include <sys/socket.h>
+#include <netlink/genl/genl.h>
+#include <netlink/genl/family.h>
+#include <netlink/genl/ctrl.h>
+#include <linux/rtnetlink.h>
+#include <netpacket/packet.h>
+#include <linux/filter.h>
+#include <linux/errqueue.h>
+
+#include <linux/pkt_sched.h>
+#include <netlink/object-api.h>
+#include <netlink/netlink.h>
+#include <netlink/socket.h>
+#include <netlink-types.h>
+
+#include "nl80211_copy.h"
 
 #include <utils/Log.h>
-#include "nl80211_copy.h"
 
 #define SOCKET_BUFFER_SIZE      (32768U)
 #define RECV_BUF_SIZE           (4096)
 #define DEFAULT_EVENT_CB_SIZE   (64)
 #define DEFAULT_CMD_SIZE        (64)
 
-/*
- Vendor OUI - This is a unique identifier that identifies organization. Lets
- code Android specific functions with Google OUI; although vendors can do more
- with their own OUI's as well.
- */
+#define MAC_ADDR_ARRAY(a) (a)[0], (a)[1], (a)[2], (a)[3], (a)[4], (a)[5]
+#define MAC_ADDR_STR "%02x:%02x:%02x:%02x:%02x:%02x"
 
-const uint32_t GOOGLE_OUI = 0x001A11;
-/* TODO: define vendor OUI here */
-
-
-/*
- This enum defines ranges for various commands; commands themselves
- can be defined in respective feature headers; i.e. find gscan command
- definitions in gscan.cpp
- */
-
-typedef enum {
-    /* don't use 0 as a valid subcommand */
-    VENDOR_NL80211_SUBCMD_UNSPECIFIED,
-
-    /* define all vendor startup commands between 0x0 and 0x0FFF */
-    VENDOR_NL80211_SUBCMD_RANGE_START = 0x0001,
-    VENDOR_NL80211_SUBCMD_RANGE_END   = 0x0FFF,
-
-    /* define all GScan related commands between 0x1000 and 0x10FF */
-    ANDROID_NL80211_SUBCMD_GSCAN_RANGE_START = 0x1000,
-    ANDROID_NL80211_SUBCMD_GSCAN_RANGE_END   = 0x10FF,
-
-    /* define all NearbyDiscovery related commands between 0x1100 and 0x11FF */
-    ANDROID_NL80211_SUBCMD_NBD_RANGE_START = 0x1100,
-    ANDROID_NL80211_SUBCMD_NBD_RANGE_END   = 0x11FF,
-
-    /* define all RTT related commands between 0x1100 and 0x11FF */
-    ANDROID_NL80211_SUBCMD_RTT_RANGE_START = 0x1100,
-    ANDROID_NL80211_SUBCMD_RTT_RANGE_END   = 0x11FF,
-
-    /* This is reserved for future usage */
-
-} ANDROID_VENDOR_SUB_COMMAND;
+typedef int16_t s16;
+typedef int32_t s32;
+typedef int64_t s64;
 
 typedef void (*wifi_internal_event_handler) (wifi_handle handle, int events);
 
@@ -73,7 +75,7 @@ typedef struct {
 
 typedef struct {
     wifi_handle handle;                             // handle to wifi data
-    char name[8+1];                                 // interface name + trailing null
+    char name[IFNAMSIZ+1];                          // interface name + trailing null
     int  id;                                        // id to use when talking to driver
 } interface_info;
 
@@ -100,6 +102,7 @@ typedef struct {
     interface_info **interfaces;                    // array of interfaces
     int num_interfaces;                             // number of interfaces
 
+    feature_set supported_feature_set;
     // add other details
 } hal_info;
 
@@ -126,6 +129,15 @@ wifi_interface_handle getIfaceHandle(interface_info *info);
 
 #define min(x, y)       ((x) < (y) ? (x) : (y))
 #define max(x, y)       ((x) > (y) ? (x) : (y))
+
+#ifdef __cplusplus
+extern "C"
+{
+#endif /* __cplusplus */
+void hexdump(char *bytes, u16 len);
+#ifdef __cplusplus
+}
+#endif /* __cplusplus */
 
 #endif
 
