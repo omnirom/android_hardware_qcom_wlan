@@ -139,7 +139,6 @@ private:
     int                                 *mChannels;
     int                                 mMaxChannels;
     int                                 *mNumChannelsPtr;
-    bool                                mWaitforRsp;
 
 public:
     GScanCommand(wifi_handle handle, int id, u32 vendor_id, u32 subcmd);
@@ -174,7 +173,6 @@ public:
                                                     wifi_scan_result *results);
     /* Takes wait time in seconds. */
     virtual int timed_wait(u16 wait_time);
-    virtual void waitForRsp(bool wait);
 };
 
 #ifdef __cplusplus
