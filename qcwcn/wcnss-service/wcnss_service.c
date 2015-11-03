@@ -42,6 +42,9 @@ ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "wcnss_qmi_client.h"
 #include "mdm_detect.h"
 #endif
+#ifdef WCNSS_QMI_OSS
+#include <dlfcn.h>
+#endif
 
 #define SUCCESS 0
 #define FAILED -1
@@ -77,10 +80,14 @@ ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define HEXA_A		10
 #define HEX_BASE		16
 
-#ifdef WCNSS_QMI
+#if defined (WCNSS_QMI) || defined(WCNSS_QMI_OSS)
 #define WLAN_ADDR_SIZE   6
 unsigned char wlan_nv_mac_addr[WLAN_ADDR_SIZE];
+#ifdef WCNSS_QMI_MAC_ADDR_REV
+#define MAC_ADDR_ARRAY(a) (a)[5], (a)[4], (a)[3], (a)[2], (a)[1], (a)[0]
+#else
 #define MAC_ADDR_ARRAY(a) (a)[0], (a)[1], (a)[2], (a)[3], (a)[4], (a)[5]
+#endif
 #define MAC_ADDRESS_STR "%02x:%02x:%02x:%02x:%02x:%02x"
 
 /* As we Want to write in 00:0a:f5:11:22:33 format in sysfs file
@@ -393,18 +400,27 @@ void setup_wcnss_parameters(int *cal, int nv_mac_addr)
 		}
 	}
 
-#ifdef WCNSS_QMI
+#if defined(WCNSS_QMI) || defined (WCNSS_QMI_OSS)
 	if (SUCCESS == nv_mac_addr)
 	{
 		pos = 0;
 		msg[pos++] = WCNSS_USR_WLAN_MAC_ADDR >> BYTE_1;
 		msg[pos++] = WCNSS_USR_WLAN_MAC_ADDR >> BYTE_0;
+#ifdef WCNSS_QMI_MAC_ADDR_REV
+		msg[pos++] = wlan_nv_mac_addr[5];
+		msg[pos++] = wlan_nv_mac_addr[4];
+		msg[pos++] = wlan_nv_mac_addr[3];
+		msg[pos++] = wlan_nv_mac_addr[2];
+		msg[pos++] = wlan_nv_mac_addr[1];
+		msg[pos++] = wlan_nv_mac_addr[0];
+#else
 		msg[pos++] = wlan_nv_mac_addr[0];
 		msg[pos++] = wlan_nv_mac_addr[1];
 		msg[pos++] = wlan_nv_mac_addr[2];
 		msg[pos++] = wlan_nv_mac_addr[3];
 		msg[pos++] = wlan_nv_mac_addr[4];
 		msg[pos++] = wlan_nv_mac_addr[5];
+#endif
 
 		ALOGI("WLAN MAC Addr:" MAC_ADDRESS_STR,
 			MAC_ADDR_ARRAY(wlan_nv_mac_addr));
@@ -465,6 +481,60 @@ void setup_wlan_driver_ath_prop()
 	property_set("wlan.driver.ath", WLAN_DRIVER_ATH_DEFAULT_VAL);
 }
 
+#ifdef WCNSS_QMI_OSS
+static void *wcnss_qmi_handle = NULL;
+static int (*wcnss_init_qmi)(void) = NULL;
+static int (*wcnss_qmi_get_wlan_address)(unsigned char *) = NULL;
+static void (*wcnss_qmi_deinit)(void) = NULL;
+
+static int setup_wcnss_qmi(void)
+{
+	const char *error = NULL;
+
+	/* initialize the DMS client and request the wlan mac address */
+	wcnss_qmi_handle = dlopen("libwcnss_qmi.so", RTLD_NOW);
+	if (!wcnss_qmi_handle) {
+		ALOGE("Failed to open libwcnss_qmi.so: %s", dlerror());
+		goto dlopen_err;
+	}
+
+	dlerror();
+
+	wcnss_init_qmi = dlsym(wcnss_qmi_handle, "wcnss_init_qmi");
+	if ((error = dlerror()) != NULL) {
+		ALOGE("Failed to resolve function: %s: %s",
+				"wcnss_init_qmi", error);
+		goto dlsym_err;
+	}
+
+	dlerror();
+
+	wcnss_qmi_get_wlan_address = dlsym(wcnss_qmi_handle,
+			"wcnss_qmi_get_wlan_address");
+	if ((error = dlerror()) != NULL) {
+		ALOGE("Failed to resolve function: %s: %s",
+				"wcnss_qmi_get_wlan_address", error);
+		goto dlsym_err;
+	}
+
+	dlerror();
+
+	wcnss_qmi_deinit = dlsym(wcnss_qmi_handle, "wcnss_qmi_deinit");
+	if ((error = dlerror()) != NULL) {
+		ALOGE("Failed to resolve function: %s: %s",
+				"wcnss_qmi_deinit", error);
+		goto dlsym_err;
+	}
+
+	return SUCCESS;
+
+dlsym_err:
+	dlclose(wcnss_qmi_handle);
+dlopen_err:
+	return FAILED;
+}
+#endif
+
 #ifdef WCNSS_QMI
 int check_modem_compatability(struct dev_info *mdm_detect_info)
 {
@@ -506,6 +576,29 @@ int main(int argc, char *argv[])
 #endif
 
 	setup_wlan_config_file();
+
+#ifdef WCNSS_QMI_OSS
+	/* dlopen WCNSS QMI lib */
+
+	rc = setup_wcnss_qmi();
+	if (rc == SUCCESS) {
+		if (SUCCESS == (*wcnss_init_qmi)()) {
+			rc = (*wcnss_qmi_get_wlan_address)(wlan_nv_mac_addr);
+			if (rc == SUCCESS) {
+				nv_mac_addr = SUCCESS;
+				ALOGE("WLAN MAC Addr:" MAC_ADDRESS_STR,
+						MAC_ADDR_ARRAY(wlan_nv_mac_addr));
+			} else
+				ALOGE("Failed to Get MAC addr from modem");
+
+			(*wcnss_qmi_deinit)();
+		}
+		else
+			ALOGE("Failed to Initialize wcnss QMI Interface");
+	} else {
+		ALOGE("Failed to Initialize wcnss QMI interface library");
+	}
+#endif
 
 #ifdef WCNSS_QMI
 	/* Call ESOC API to get the number of modems.
@@ -577,6 +670,10 @@ nomodem:
 			WCNSS_CAL_FILE);
 
 	close(fd_dev);
+
+#ifdef WCNSS_QMI_OSS
+	dlclose(wcnss_qmi_handle);
+#endif
 
 	return rc;
 }
