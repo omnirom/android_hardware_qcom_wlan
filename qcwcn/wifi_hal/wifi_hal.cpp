@@ -671,10 +671,10 @@ static int internal_valid_message_handler(nl_msg *msg, void *arg)
     if (cmd == NL80211_CMD_VENDOR) {
         vendor_id = event.get_u32(NL80211_ATTR_VENDOR_ID);
         subcmd = event.get_u32(NL80211_ATTR_VENDOR_SUBCMD);
-        ALOGI("event received %s, vendor_id = 0x%0x, subcmd = 0x%0x",
+        ALOGV("event received %s, vendor_id = 0x%0x, subcmd = 0x%0x",
                 event.get_cmdString(), vendor_id, subcmd);
     } else {
-        ALOGI("event received %s", event.get_cmdString());
+        ALOGV("event received %s", event.get_cmdString());
     }
 
     // event.log();
@@ -703,7 +703,7 @@ static int internal_valid_message_handler(nl_msg *msg, void *arg)
     }
 
     if (!dispatched) {
-        ALOGI("event ignored!!");
+        ALOGV("event ignored!!");
     }
 
     pthread_mutex_unlock(&info->cb_lock);
@@ -752,7 +752,7 @@ public:
         int i;
 
         if (!tb[CTRL_ATTR_MCAST_GROUPS]) {
-            ALOGI("No multicast groups found");
+            ALOGV("No multicast groups found");
             return NL_SKIP;
         } else {
             // ALOGI("Multicast groups attr size = %d",
