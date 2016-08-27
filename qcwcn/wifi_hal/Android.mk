@@ -19,7 +19,9 @@ LOCAL_PATH := $(call my-dir)
 include $(CLEAR_VARS)
 
 LOCAL_CFLAGS := -Wno-unused-parameter
-LOCAL_CFLAGS += -DNAN_2_0
+ifeq ($(TARGET_BUILD_VARIANT),userdebug)
+LOCAL_CFLAGS += "-DLOG_NDEBUG=0"
+endif
 
 # gscan.cpp: address of array 'cached_results[i].results' will always evaluate to 'true'
 LOCAL_CLANG_CFLAGS := -Wno-pointer-bool-conversion
@@ -54,6 +56,7 @@ LOCAL_SRC_FILES := \
 	rssi_monitor.cpp
 
 LOCAL_MODULE := libwifi-hal-qcom
+LOCAL_CLANG := true
 LOCAL_SHARED_LIBRARIES += libnetutils liblog
 
 ifneq ($(wildcard external/libnl),)
@@ -71,8 +74,10 @@ include $(CLEAR_VARS)
 LOCAL_REQUIRED_MODULES :=
 
 LOCAL_CFLAGS += -Wno-unused-parameter
-LOCAL_CFLAGS += -DNAN_2_0
 LOCAL_CPPFLAGS += -Wno-conversion-null
+ifeq ($(TARGET_BUILD_VARIANT),userdebug)
+LOCAL_CFLAGS += "-DLOG_NDEBUG=0"
+endif
 
 # gscan.cpp: address of array 'cached_results[i].results' will always evaluate to 'true'
 LOCAL_CLANG_CFLAGS := -Wno-pointer-bool-conversion
@@ -107,6 +112,7 @@ LOCAL_SRC_FILES := \
 	rssi_monitor.cpp
 
 LOCAL_MODULE := libwifi-hal-qcom
+LOCAL_CLANG := true
 LOCAL_SHARED_LIBRARIES += libnetutils liblog
 LOCAL_SHARED_LIBRARIES += libdl libhardware_legacy
 

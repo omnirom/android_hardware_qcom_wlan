@@ -25,6 +25,7 @@
 
 #include <stdint.h>
 #include <fcntl.h>
+#include <inttypes.h>
 #include <sys/socket.h>
 #include <netlink/genl/genl.h>
 #include <netlink/genl/family.h>
@@ -133,6 +134,11 @@ typedef struct hal_info_s {
     pthread_mutex_t lh_lock;
     /* mutex for the alert_handler access*/
     pthread_mutex_t ah_lock;
+    u32 firmware_bus_max_size;
+    bool fate_monitoring_enabled;
+    packet_fate_monitor_info *pkt_fate_stats;
+    /* mutex for the packet fate stats shared resource protection */
+    pthread_mutex_t pkt_fate_stats_lock;
 } hal_info;
 
 wifi_error wifi_register_handler(wifi_handle handle, int cmd, nl_recvmsg_msg_cb_t func, void *arg);
@@ -179,6 +185,7 @@ extern "C"
 {
 #endif /* __cplusplus */
 void hexdump(void *bytes, u16 len);
+u8 get_rssi(u8 rssi_wo_noise_floor);
 #ifdef __cplusplus
 }
 #endif /* __cplusplus */
