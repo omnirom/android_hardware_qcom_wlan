@@ -19,8 +19,8 @@ LOCAL_PATH := $(call my-dir)
 include $(CLEAR_VARS)
 
 LOCAL_CFLAGS := -Wno-unused-parameter
-ifeq ($(TARGET_BUILD_VARIANT),userdebug)
-LOCAL_CFLAGS += "-DLOG_NDEBUG=0"
+ifeq ($(TARGET_BUILD_VARIANT),eng)
+LOCAL_CFLAGS += "-DLOG_NDEBUG=0 -UNDEBUG"
 endif
 
 # gscan.cpp: address of array 'cached_results[i].results' will always evaluate to 'true'
