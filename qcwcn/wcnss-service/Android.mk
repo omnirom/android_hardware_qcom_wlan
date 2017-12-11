@@ -6,6 +6,7 @@ LOCAL_MODULE := wcnss_service
 LOCAL_C_INCLUDES += $(TARGET_OUT_HEADERS)/common/inc/
 LOCAL_SRC_FILES := wcnss_service.c
 LOCAL_SHARED_LIBRARIES := libc libcutils libutils liblog
+LOCAL_PROPRIETARY_MODULE := true
 ifeq ($(strip $(TARGET_USES_QCOM_WCNSS_QMI)),true)
 ifeq ($(TARGET_USES_WCNSS_MAC_ADDR_REV),true)
 LOCAL_CFLAGS += -DWCNSS_QMI_MAC_ADDR_REV
