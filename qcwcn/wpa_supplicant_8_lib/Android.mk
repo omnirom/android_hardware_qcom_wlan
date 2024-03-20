@@ -63,7 +63,7 @@ L_CFLAGS += -Werror
 ########################
 
 include $(CLEAR_VARS)
-LOCAL_MODULE := lib_driver_cmd_qcwcn
+LOCAL_MODULE := lib_driver_cmd_qcwcn-caf
 LOCAL_SHARED_LIBRARIES := libc libcutils
 ifneq ($(wildcard external/libnl),)
 LOCAL_SHARED_LIBRARIES += libnl
