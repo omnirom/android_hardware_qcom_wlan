@@ -164,6 +164,9 @@
 #define AP_AC_VALUE_STR_LEN             strlen(AP_AC_VALUE_STR)
 #define MAC_ADDR_STR_LEN             	strlen(MAC_ADDRESS_STR)
 
+// Module defined MAC ADDR macros to print full mac address.
+// This is in order to remove dependency from MAC2STR definitions
+// in common.h from wpa_supplicant.
 #define MAC_ADDR_STR "%02x:%02x:%02x:%02x:%02x:%02x"
 #define MAC_ADDR_ARRAY(a) (a)[0], (a)[1], (a)[2], (a)[3], (a)[4], (a)[5]
 
@@ -178,6 +181,10 @@
 #define TWT_PAUSE_RESP_LEN       strlen(TWT_PAUSE_RESP)
 #define TWT_RESUME_RESP_LEN      strlen(TWT_RESUME_RESP)
 #define TWT_NOTIFY_RESP_LEN      strlen(TWT_NOTIFY_RESP)
+
+#define OPM_MODE_DISABLE         0
+#define OPM_MODE_ENABLE          1
+#define OPM_MODE_USER_DEFINED    2
 
 static int twt_async_support = -1;
 
@@ -261,7 +268,7 @@ struct mcc_quota {
 };
 
 
-static char *get_next_arg(char *cmd)
+char *get_next_arg(char *cmd)
 {
 	char *pos = cmd;
 
@@ -1221,7 +1228,6 @@ static void parse_ext_ie(const u8 *ie, int ie_len)
 	}
 
 	ext_id = *ie++;
-	ie_len--;
 
 	switch (ext_id) {
 	case WLAN_EID_EXT_HE_CAPABILITIES:
@@ -2681,41 +2687,44 @@ static int check_for_twt_cmd(char **cmd)
 		*cmd += (TWT_SET_PARAM_STR_LEN + 1);
 		return QCA_WLAN_TWT_SET_PARAM;
 	} else {
-		wpa_printf(MSG_DEBUG, "Not a TWT command");
 		return TWT_CMD_NOT_EXIST;
 	}
 }
 
 static u64 get_u64_from_string(char *cmd_string, int *ret)
 {
-	u64 val = 0;
+	long long val = 0;
+	char *endptr = NULL;
 
 	*ret = 0;
 	errno = 0;
-	val = strtoll(cmd_string, NULL, 10);
-	if (errno == ERANGE || (errno != 0 && val == 0)) {
+	val = strtoll(cmd_string, &endptr, 10);
+	if (errno == ERANGE || (errno != 0 && val == 0) ||
+	    *cmd_string == *endptr || val < 0) {
 		wpa_printf(MSG_ERROR, "invalid value");
 		*ret = -EINVAL;
-        }
-	return val;
+	}
+	return (u64)val;
 }
 
 
 static u32 get_u32_from_string(char *cmd_string, int *ret)
 {
-	u32 val = 0;
+	long val = 0;
+	char *endptr = NULL;
 
 	*ret = 0;
 	errno = 0;
-	val = strtol(cmd_string, NULL, 10);
-	if (errno == ERANGE || (errno != 0 && val == 0)) {
+	val = strtol(cmd_string, &endptr, 10);
+	if (errno == ERANGE || (errno != 0 && val == 0) ||
+	    *cmd_string == *endptr || val < 0) {
 		wpa_printf(MSG_ERROR, "invalid value");
 		*ret = -EINVAL;
-        }
-	return val;
+	}
+	return (u32)val;
 }
 
-static s32 get_s32_from_string(char *cmd_string, int *ret)
+s32 get_s32_from_string(char *cmd_string, int *ret)
 {
 	s64 val64 = 0;
 	s32 val = 0;
@@ -2738,16 +2747,34 @@ static s32 get_s32_from_string(char *cmd_string, int *ret)
 
 static u8 get_u8_from_string(char *cmd_string, int *ret)
 {
-	u8 val = 0;
+	long val = 0;
+	char *endptr = NULL;
 
 	*ret = 0;
 	errno = 0;
-	val = strtol(cmd_string, NULL, 10) & 0xFF;
-	if (errno == ERANGE || (errno != 0 && val == 0)) {
+	val = strtol(cmd_string, &endptr, 10);
+	if (errno == ERANGE || (errno != 0 && val == 0) ||
+	    *cmd_string == *endptr || val < 0) {
 		wpa_printf(MSG_ERROR, "invalid value");
 		*ret = -EINVAL;
-        }
-	return val;
+	}
+	return (u8)(val & 0xFF);
+}
+
+static u16 get_u16_from_string(char *cmd_string, int *ret)
+{
+	long val = 0;
+	char *endptr = NULL;
+
+	*ret = 0;
+	errno = 0;
+	val = strtol(cmd_string, &endptr, 10);
+	if (errno == ERANGE || (errno != 0 && val == 0) ||
+	    *cmd_string == *endptr || val < 0) {
+		wpa_printf(MSG_ERROR, "Invalid input to get u16 value");
+		*ret = -EINVAL;
+	}
+	return (u16)(val & 0xFFFF);
 }
 
 char *move_to_next_str(char *cmd)
@@ -3029,7 +3056,6 @@ int process_twt_setup_cmd_string(char *cmd,
 					get_u32_from_string(cmd, &ret);
 		if (ret < 0)
 			return ret;
-		cmd = move_to_next_str(cmd);
 	}
 
 	print_setup_cmd_values(twt_setup_params);
@@ -5252,7 +5278,6 @@ static int wpa_driver_form_clear_mcc_quota_msg(struct i802_bss *bss,
 			return -EINVAL;
 		}
 		wpa_printf(MSG_INFO, "mcc_quota: ifindex %u", if_index);
-		cmd += strlen(iface) + 1;
 	}
 
 	nlmsg = prepare_vendor_nlmsg(drv, bss->ifname,
@@ -6349,6 +6374,225 @@ nlmsg_fail:
 	return ret;
 }
 
+static int wpa_driver_set_ul_mu_cfg(struct i802_bss *bss, char *cmd)
+{
+	struct wpa_driver_nl80211_data *drv = bss->drv;
+	struct nlattr *attr;
+	struct nl_msg *nlmsg = NULL;
+	int ret = 0;
+	u8 ulmu;
+	enum qca_ul_mu_config val;
+
+	ulmu = get_u8_from_string(cmd, &ret);
+	if (ret || ulmu > 1) {
+		wpa_printf(MSG_ERROR, "set_ul_mu_cfg: input error");
+		return -EINVAL;
+	}
+
+	if (ulmu)
+		val = QCA_UL_MU_ENABLE;
+	else
+		val = QCA_UL_MU_SUSPEND;
+
+	nlmsg =
+	prepare_vendor_nlmsg(drv, bss->ifname,
+			     QCA_NL80211_VENDOR_SUBCMD_SET_WIFI_CONFIGURATION);
+	if (!nlmsg) {
+		wpa_printf(MSG_ERROR, "set_ul_mu_cfg: Failed to alloc nl msg");
+		return -ENOMEM;
+	}
+
+	attr = nla_nest_start(nlmsg, NL80211_ATTR_VENDOR_DATA);
+	if (!attr) {
+		wpa_printf(MSG_ERROR, "set_ul_mu_config: Failed to alloc attr");
+		ret = -ENOMEM;
+		goto fail;
+	}
+
+	ret = nla_put_u8(nlmsg, QCA_WLAN_VENDOR_ATTR_CONFIG_UL_MU_CONFIG, val);
+	if (ret) {
+		wpa_printf(MSG_ERROR, "set_ul_mu_cfg:Fail to put ulmu");
+		goto fail;
+	}
+
+	nla_nest_end(nlmsg, attr);
+
+	ret = send_nlmsg((struct nl_sock *)drv->global->nl, nlmsg, NULL, NULL);
+	if (ret)
+		wpa_printf(MSG_ERROR, "set_ul_mu_cfg: Error sending nlmsg");
+
+	return ret;
+fail:
+	nlmsg_free(nlmsg);
+	return ret;
+}
+
+static uint8_t wpa_driver_convert_opm_mode(uint8_t opm_mode)
+{
+	switch (opm_mode) {
+	case 0:
+		return QCA_WLAN_VENDOR_OPM_MODE_DISABLE;
+	case 1:
+		return QCA_WLAN_VENDOR_OPM_MODE_ENABLE;
+	case 2:
+		return QCA_WLAN_VENDOR_OPM_MODE_USER_DEFINED;
+	default:
+		return opm_mode;
+	}
+}
+
+static int wpa_driver_ps_config_cmd(struct i802_bss *bss, char *cmd)
+{
+	struct wpa_driver_nl80211_data *drv;
+	struct nl_msg *nlmsg;
+	struct nlattr *attr;
+	u8 opm_mode;
+	u16 ps_ito, spec_wake;
+	int ret;
+
+	drv = bss->drv;
+	cmd = skip_white_space(cmd);
+	if (*cmd == '\0') {
+		wpa_printf(MSG_ERROR, "mode and config values are missing");
+		return -EINVAL;
+	}
+	opm_mode = get_u8_from_string(cmd, &ret);
+	if (ret < 0) {
+		wpa_printf(MSG_ERROR, "ps_config: Invalid opm_mode");
+		return -EINVAL;
+	}
+
+	if (opm_mode == OPM_MODE_USER_DEFINED) {
+		cmd = move_to_next_str(cmd);
+		if (*cmd == '\0') {
+			wpa_printf(MSG_ERROR, "ps_ito is missing in command");
+			return -EINVAL;
+		}
+		ps_ito = get_u16_from_string(cmd, &ret);
+		if (ret < 0) {
+			wpa_printf(MSG_ERROR, "Invalid ps_ito value");
+			return -EINVAL;
+		}
+		cmd = move_to_next_str(cmd);
+		if (*cmd == '\0') {
+			wpa_printf(MSG_ERROR,
+				   "spec_wake is missing in command");
+			return -EINVAL;
+		}
+		spec_wake = get_u16_from_string(cmd, &ret);
+		if (ret < 0) {
+			wpa_printf(MSG_ERROR, "Invalid spec_wake value");
+			return -EINVAL;
+		}
+	}
+
+	nlmsg = prepare_vendor_nlmsg(drv, bss->ifname,
+				     QCA_NL80211_VENDOR_SUBCMD_SET_WIFI_CONFIGURATION);
+	if (!nlmsg) {
+		wpa_printf(MSG_ERROR,
+			   "Failed to allocate nlmsg for set_opm_mode cmd");
+		return -ENOMEM;
+	}
+
+	attr = nla_nest_start(nlmsg, NL80211_ATTR_VENDOR_DATA);
+	if (!attr) {
+		ret = -ENOMEM;
+		wpa_printf(MSG_ERROR,
+			   "Failed to create nl attr for set_opm_mode cmd");
+		goto nlmsg_fail;
+	}
+	if (nla_put_u8(nlmsg,
+		       QCA_WLAN_VENDOR_ATTR_CONFIG_OPTIMIZED_POWER_MANAGEMENT,
+		       wpa_driver_convert_opm_mode(opm_mode))) {
+		ret = -ENOMEM;
+		wpa_printf(MSG_ERROR, "Failed to put power_save_mode value");
+		goto nlmsg_fail;
+	}
+	if (opm_mode == OPM_MODE_USER_DEFINED) {
+		if (nla_put_u16(nlmsg, QCA_WLAN_VENDOR_ATTR_CONFIG_OPM_ITO,
+				ps_ito)) {
+			ret = -ENOMEM;
+			wpa_printf(MSG_ERROR, "Failed to put ps_ito value");
+			goto nlmsg_fail;
+		}
+		if (nla_put_u16(nlmsg,
+				QCA_WLAN_VENDOR_ATTR_CONFIG_OPM_SPEC_WAKE_INTERVAL,
+				spec_wake)) {
+			ret = -ENOMEM;
+			wpa_printf(MSG_ERROR, "Failed to put spec_wake value");
+			goto nlmsg_fail;
+		}
+	}
+	nla_nest_end(nlmsg, attr);
+
+	ret = send_nlmsg((struct nl_sock *)drv->global->nl, nlmsg, NULL, NULL);
+	if (ret) {
+		wpa_printf(MSG_ERROR,
+			   "Failed to send set_opm_mode nlmsg, error:%d", ret);
+		return ret;
+	}
+	return 0;
+nlmsg_fail:
+	nlmsg_free(nlmsg);
+	return ret;
+}
+
+static int wpa_driver_cfg_coex_traffic_shaping(struct i802_bss *bss, char *cmd)
+{
+	struct wpa_driver_nl80211_data *drv;
+	struct nl_msg *nlmsg;
+	struct nlattr *attr;
+	int ret;
+	u8 traffic_shaping_mode;
+
+	cmd = skip_white_space(cmd);
+	if (*cmd == '\0') {
+		wpa_printf(MSG_ERROR, "traffic shaping mode is missing");
+		return -EINVAL;
+	}
+
+	drv = bss->drv;
+	traffic_shaping_mode = get_u8_from_string(cmd, &ret);
+	if (ret < 0) {
+		wpa_printf(MSG_ERROR, "traffic shaping mode is invalid");
+		return ret;
+	}
+
+	if (traffic_shaping_mode > 1) {
+		wpa_printf(MSG_ERROR, "Invalid traffic_shaping_mode %d",
+			   traffic_shaping_mode);
+		return -EINVAL;
+	}
+
+	nlmsg = prepare_vendor_nlmsg(drv, bss->ifname,
+				     QCA_NL80211_VENDOR_SUBCMD_SET_WIFI_CONFIGURATION);
+	if (!nlmsg) {
+		wpa_printf(MSG_ERROR, "Failed to allocate nlmsg for traffic_shaping_mode cmd");
+		return -ENOMEM;
+	}
+
+	attr = nla_nest_start(nlmsg, NL80211_ATTR_VENDOR_DATA);
+	if (!attr) {
+		ret = -ENOMEM;
+		wpa_printf(MSG_ERROR, "Failed to create traffic_shaping_mode cmd nl attribute");
+		goto nlmsg_fail;
+	}
+	if (nla_put_u8(nlmsg, QCA_WLAN_VENDOR_ATTR_CONFIG_COEX_TRAFFIC_SHAPING_MODE,
+		       traffic_shaping_mode)) {
+		ret = -ENOMEM;
+		wpa_printf(MSG_ERROR, "Failed to put traffic_shaping_mode value");
+		goto nlmsg_fail;
+	}
+	nla_nest_end(nlmsg, attr);
+
+	ret = send_nlmsg((struct nl_sock *)drv->global->nl, nlmsg, NULL, NULL);
+	if (ret)
+		wpa_printf(MSG_ERROR, "Failed to send traffic_shaping_mode nlmsg, error:%d", ret);
+	return ret;
+nlmsg_fail:
+	nlmsg_free(nlmsg);
+	return ret;
+}
 
 int wpa_driver_nl80211_driver_cmd(void *priv, char *cmd, char *buf,
 				  size_t buf_len )
@@ -6410,7 +6654,7 @@ int wpa_driver_nl80211_driver_cmd(void *priv, char *cmd, char *buf,
 		ret = linux_get_ifhwaddr(drv->global->ioctl_sock, bss->ifname, macaddr);
 		if (!ret)
 			ret = os_snprintf(buf, buf_len,
-					  "Macaddr = " MACSTR "\n", MAC2STR(macaddr));
+					  "Macaddr = " MAC_ADDR_STR "\n", MAC_ADDR_ARRAY(macaddr));
 	} else if (os_strncasecmp(cmd, "SET_CONGESTION_REPORT ", 22) == 0) {
 		return wpa_driver_cmd_set_congestion_report(priv, cmd + 22);
 	} else if (os_strncasecmp(cmd, "SET_TXPOWER ", 12) == 0) {
@@ -6692,6 +6936,31 @@ int wpa_driver_nl80211_driver_cmd(void *priv, char *cmd, char *buf,
 		/* DRIVER SET_LISTEN_INTERVAL <listen_interval> */
 		cmd += 20;
 		return wpa_driver_cfg_listen_interval_cmd(bss, cmd);
+	} else if (os_strncasecmp(cmd, "SET_UL_MU_CONFIG ", 17) == 0) {
+		/* Usage: DRIVER SET_UL_MU_CONFIG <value>
+		 * value 0 - All UL_MU transmission are suspended by STA
+		 * value 1 - All UL_MU transmission are enabled by STA
+		 */
+		cmd += 17;
+		return wpa_driver_set_ul_mu_cfg(bss, cmd);
+	} else if (os_strncasecmp(cmd, "SET_PS_CONFIG ", 14) == 0) {
+		/* DRIVER SET_PS_CONFIG <opm_mode> <ps_ito> <spec_wake>
+		 * opm_mode  - Optimized power management Mode
+		 *     value 0 - Disable OPM
+		 *     value 1 - Enable OPM
+		 *     value 2 - User defined OPM
+		 * ps_ito    - Power save inactivity timeout
+		 * spec_wake - Speculative wake interval
+		 */
+		cmd += 14;
+		return wpa_driver_ps_config_cmd(bss, cmd);
+	} else if (os_strncasecmp(cmd, "COEX_TRAFFIC_SHAPING_MODE ", 26) == 0) {
+		/* DRIVER COEX_TRAFFIC_SHAPING_MODE <mode>
+		 * <mode> = 0 (All traffic shaping disabled and fixed arbitration config)
+		 * <mode> = 1 (enable coex algos)
+		 */
+		cmd += 26;
+		return wpa_driver_cfg_coex_traffic_shaping(bss, cmd);
 	} else { /* Use private command */
 		memset(&ifr, 0, sizeof(ifr));
 		memset(&priv_cmd, 0, sizeof(priv_cmd));

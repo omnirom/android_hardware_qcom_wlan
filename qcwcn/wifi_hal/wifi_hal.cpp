@@ -90,6 +90,7 @@
 #include "wifiloggercmd.h"
 #include "tcp_params_update.h"
 
+
 /*
  BUGBUG: normally, libnl allocates ports for all connections it makes; but
  being a static library, it doesn't really know how many other netlink
@@ -147,6 +148,13 @@ wifi_error
     wifi_init_tcp_param_change_event_handler(wifi_interface_handle iface);
 
 wifi_error wifi_set_voip_mode(wifi_interface_handle iface, wifi_voip_mode mode);
+#ifndef TARGET_SUPPORTS_WEARABLES
+wifi_error wifi_get_supported_iface_combination(wifi_interface_handle iface_handle);
+
+wifi_error wifi_get_supported_iface_concurrency_matrix(
+        wifi_handle handle,
+        wifi_iface_concurrency_matrix *iface_concurrency_matrix);
+#endif /* TARGET_SUPPORTS_WEARABLES */
 
 /* Initialize/Cleanup */
 
@@ -439,6 +447,7 @@ static wifi_error wifi_get_sar_version(wifi_interface_handle handle)
     return ret;
 }
 
+
 static wifi_error get_firmware_bus_max_size_supported(
                                                 wifi_interface_handle iface)
 {
@@ -596,6 +605,15 @@ wifi_error wifi_set_coex_unsafe_channels(wifi_handle handle, u32 num_channels,
     struct nlattr *nl_attr_unsafe_chan = NULL;
     struct nlattr *unsafe_channels_attr = NULL;
     hal_info *info = NULL;
+    int freq_cnt = 0;
+    u32 *freq = (u32 *) malloc(sizeof(u32) * num_channels);
+    u32 *power_cap_dbm = (u32 *) malloc(sizeof(u32) * num_channels);
+
+    if (!freq || !power_cap_dbm) {
+        ALOGE("%s: Failed to allocate memory", __FUNCTION__);
+        ret = WIFI_ERROR_OUT_OF_MEMORY;
+        goto cleanup;
+    }
 
     if (!handle) {
          ALOGE("%s: Error, wifi_handle NULL", __FUNCTION__);
@@ -644,6 +662,25 @@ wifi_error wifi_set_coex_unsafe_channels(wifi_handle handle, u32 num_channels,
     }
     ALOGD("%s: num_channels:%d, restrictions:%x", __FUNCTION__, num_channels,
           restrictions);
+    for (int i = 0; i < num_channels; i++)
+    {
+        u32 frequency = get_frequency_from_channel(unsafeChannels[i].channel,
+                unsafeChannels[i].band);
+        if (frequency != 0)
+        {
+          freq[freq_cnt] = frequency;
+          power_cap_dbm[freq_cnt] = unsafeChannels[i].power_cap_dbm;
+          freq_cnt++;
+          ALOGV("%s: channel:%d, freq:%d, power_cap_dbm:%d, band:%d",
+               __FUNCTION__, unsafeChannels[i].channel, frequency,
+               unsafeChannels[i].power_cap_dbm, unsafeChannels[i].band);
+        }
+        else {
+            ALOGV("%s: Invalid channel found, channel:%d, power_cap_dbm:%d, band:%d",
+               __FUNCTION__, unsafeChannels[i].channel,
+               unsafeChannels[i].power_cap_dbm, unsafeChannels[i].band);
+        }
+    }
     if (num_channels == 0) {
          unsafe_channels_attr = cmd->attr_start(0);
          if (!unsafe_channels_attr) {
@@ -675,61 +712,59 @@ wifi_error wifi_set_coex_unsafe_channels(wifi_handle handle, u32 num_channels,
             ret = WIFI_ERROR_INVALID_ARGS;
             goto cleanup;
         }
-    }
-    for (int i = 0; i < num_channels; i++) {
-         unsafe_channels_attr = cmd->attr_start(i);
-         if (!unsafe_channels_attr) {
-              ALOGE("%s: failed attr_start for unsafe_channels_attr of"
+
+        if(freq_cnt == 0)
+        {
+            ALOGE("%s: No valid frequency, ignore channel list", __FUNCTION__);
+            ret = WIFI_ERROR_INVALID_ARGS;
+            goto cleanup;
+        }
+        for (int i = 0; i < freq_cnt; i++) {
+            unsafe_channels_attr = cmd->attr_start(i);
+            if (!unsafe_channels_attr) {
+                ALOGE("%s: failed attr_start for unsafe_channels_attr of"
                     " index:%d", __FUNCTION__, i);
-              ret = WIFI_ERROR_OUT_OF_MEMORY;
-              goto cleanup;
-         }
-         u32 freq = get_frequency_from_channel(unsafeChannels[i].channel,
-               unsafeChannels[i].band);
-         if (!freq) {
-              ALOGE("%s: Failed to get frequency of band:%d, channel:%d",
-                        __FUNCTION__, (int)unsafeChannels[i].band,
-                        unsafeChannels[i].channel);
-              ret = WIFI_ERROR_INVALID_ARGS;
-              goto cleanup;
-         }
-         ret = cmd->put_u32(
-               QCA_WLAN_VENDOR_ATTR_AVOID_FREQUENCY_START, freq);
-         if (ret != WIFI_SUCCESS) {
-              ALOGE("%s: Failed to put frequency start, ret:%d",
+                ret = WIFI_ERROR_OUT_OF_MEMORY;
+                goto cleanup;
+            }
+
+            ret = cmd->put_u32(
+                  QCA_WLAN_VENDOR_ATTR_AVOID_FREQUENCY_START, freq[i]);
+            if (ret != WIFI_SUCCESS) {
+                ALOGE("%s: Failed to put frequency start, ret:%d",
+                      __FUNCTION__, ret);
+                goto cleanup;
+            }
+            ret = cmd->put_u32(
+                QCA_WLAN_VENDOR_ATTR_AVOID_FREQUENCY_END, freq[i]);
+            if (ret != WIFI_SUCCESS) {
+                ALOGE("%s: Failed to put frequency end, ret:%d",
                     __FUNCTION__, ret);
-              goto cleanup;
-         }
-         ret = cmd->put_u32(
-               QCA_WLAN_VENDOR_ATTR_AVOID_FREQUENCY_END, freq);
-         if (ret != WIFI_SUCCESS) {
-              ALOGE("%s: Failed to put frequency end, ret:%d",
-                    __FUNCTION__, ret);
-              goto cleanup;
-         }
-         /**
-          * WIFI_COEX_NO_POWER_CAP (0x7FFFFFF) is specific to android
-          * framework, this value denotes that framework/wifihal is not
-          * providing any power cap and allow driver/firmware to operate on
-          * current power cap dbm. As driver is supposed to work on with
-          * LA/LE etc, we are skipping to send 0x7FFFFFF down to driver,
-          * hence driver will be operating as per current power cap calculated
-          * based on regulatory or other constraints.
-          */
-         if (unsafeChannels[i].power_cap_dbm != WIFI_COEX_NO_POWER_CAP) {
-             ret = cmd->put_s32(
-                   QCA_WLAN_VENDOR_ATTR_AVOID_FREQUENCY_POWER_CAP_DBM,
-                   unsafeChannels[i].power_cap_dbm);
-             if (ret != WIFI_SUCCESS) {
-                 ALOGE("%s: Failed to put power_cap_dbm, ret:%d",
-                       __FUNCTION__, ret);
-                 goto cleanup;
-             }
-         }
-         cmd->attr_end(unsafe_channels_attr);
-         ALOGD("%s: channel:%d, freq:%d, power_cap_dbm:%d, band:%d",
-               __FUNCTION__, unsafeChannels[i].channel, freq,
-               unsafeChannels[i].power_cap_dbm, unsafeChannels[i].band);
+                goto cleanup;
+            }
+            /**
+             * WIFI_COEX_NO_POWER_CAP (0x7FFFFFF) is specific to android
+             * framework, this value denotes that framework/wifihal is not
+             * providing any power cap and allow driver/firmware to operate on
+             * current power cap dbm. As driver is supposed to work on with
+             * LA/LE etc, we are skipping to send 0x7FFFFFF down to driver,
+             * hence driver will be operating as per current power cap calculated
+             * based on regulatory or other constraints.
+             */
+            if (power_cap_dbm[i] != WIFI_COEX_NO_POWER_CAP) {
+                ret = cmd->put_s32(
+                      QCA_WLAN_VENDOR_ATTR_AVOID_FREQUENCY_POWER_CAP_DBM,
+                      power_cap_dbm[i]);
+                if (ret != WIFI_SUCCESS) {
+                    ALOGE("%s: Failed to put power_cap_dbm, ret:%d",
+                          __FUNCTION__, ret);
+                    goto cleanup;
+                }
+            }
+            ALOGD("%s: freq:%d, power_cap_dbm:%d",
+                   __FUNCTION__, freq[i], power_cap_dbm[i]);
+            cmd->attr_end(unsafe_channels_attr);
+        }
     }
     cmd->attr_end(nl_attr_unsafe_chan);
     if (num_channels > 0) {
@@ -753,6 +788,10 @@ wifi_error wifi_set_coex_unsafe_channels(wifi_handle handle, u32 num_channels,
 cleanup:
     if (cmd)
         delete cmd;
+    if (freq)
+        free (freq);
+    if (power_cap_dbm)
+        free (power_cap_dbm);
     return ret;
 }
 
@@ -1090,6 +1129,12 @@ wifi_error init_wifi_vendor_hal_func_table(wifi_hal_fn *fn) {
     fn->wifi_set_dtim_config = wifi_set_dtim_config;
     fn->wifi_set_voip_mode = wifi_set_voip_mode;
     fn->wifi_get_usable_channels = wifi_get_usable_channels;
+    fn->wifi_get_supported_radio_combinations_matrix =
+                                wifi_get_supported_radio_combinations_matrix;
+#ifndef TARGET_SUPPORTS_WEARABLES
+    fn->wifi_get_supported_iface_concurrency_matrix =
+                                wifi_get_supported_iface_concurrency_matrix;
+#endif /* TARGET_SUPPORTS_WEARABLES */
 
     return WIFI_SUCCESS;
 }
@@ -1420,6 +1465,14 @@ wifi_error wifi_initialize(wifi_handle *handle)
 
     ALOGV("support_nan_ext_cmd is %d",
           info->support_nan_ext_cmd);
+
+#ifndef TARGET_SUPPORTS_WEARABLES
+    ret = wifi_get_supported_iface_combination(iface_handle);
+    if (ret != WIFI_SUCCESS) {
+        ALOGE("Failed to get driver supported interface combinations");
+        goto unload;
+    }
+#endif /* TARGET_SUPPORTS_WEARABLES */
 
     ret = wifi_get_sar_version(iface_handle);
     if (ret != WIFI_SUCCESS) {
@@ -2554,6 +2607,73 @@ cleanup:
     return ret;
 }
 
+wifi_error wifi_get_supported_radio_combinations_matrix(
+                wifi_handle handle, u32 max_size, u32 *size,
+                wifi_radio_combination_matrix *radio_combination_matrix)
+{
+    wifi_error ret = WIFI_ERROR_UNKNOWN;;
+    struct nlattr *nlData;
+    WifihalGeneric *vCommand = NULL;
+    hal_info *info = NULL;
+
+    ALOGI("%s: enter", __FUNCTION__);
+    if (!handle) {
+         ALOGE("%s: Error, wifi_handle NULL", __FUNCTION__);
+         return WIFI_ERROR_UNKNOWN;
+    }
+
+    info = getHalInfo(handle);
+    if (!info || info->num_interfaces < 1) {
+         ALOGE("%s: Error, wifi_handle NULL or base wlan interface not present",
+               __FUNCTION__);
+         return WIFI_ERROR_UNKNOWN;
+    }
+
+    if (size == NULL || radio_combination_matrix == NULL) {
+        ALOGE("%s: NULL set pointer provided. Exit.",
+            __func__);
+        return WIFI_ERROR_INVALID_ARGS;
+    }
+
+    if (max_size < sizeof(u32)) {
+        ALOGE("%s: Invalid max size value %d", __func__, max_size);
+        return WIFI_ERROR_INVALID_ARGS;
+    }
+
+    vCommand = new WifihalGeneric(handle, get_requestid(), OUI_QCA,
+                        QCA_NL80211_VENDOR_SUBCMD_GET_RADIO_COMBINATION_MATRIX);
+    if (vCommand == NULL) {
+        ALOGE("%s: Error vCommand NULL", __FUNCTION__);
+        return WIFI_ERROR_OUT_OF_MEMORY;
+    }
+
+    ret = vCommand->create();
+    if (ret != WIFI_SUCCESS)
+        goto cleanup;
+
+    nlData = vCommand->attr_start(NL80211_ATTR_VENDOR_DATA);
+    if (!nlData){
+        ret = WIFI_ERROR_UNKNOWN;
+        goto cleanup;
+    }
+
+    vCommand->attr_end(nlData);
+
+    /* Populate the input received from caller/framework. */
+    vCommand->set_radio_matrix_max_size(max_size);
+    vCommand->set_radio_matrix_size(size);
+    vCommand->set_radio_matrix(radio_combination_matrix);
+
+    ret = vCommand->requestResponse();
+    if (ret != WIFI_SUCCESS) {
+        ALOGE("%s: requestResponse() error: %d", __FUNCTION__, ret);
+        goto cleanup;
+    }
+
+cleanup:
+    delete vCommand;
+    return ret;
+}
 
 wifi_error wifi_set_nodfs_flag(wifi_interface_handle handle, u32 nodfs)
 {
@@ -3314,6 +3434,330 @@ static int wifi_is_nan_ext_cmd_supported(wifi_interface_handle iface_handle)
     }
 }
 
+#ifndef TARGET_SUPPORTS_WEARABLES
+char *get_iface_mask_str(u32 mask, char *buf, size_t buflen) {
+    char * pos, *end;
+    int res;
+
+    pos = buf;
+    end = buf + buflen;
+
+    res = snprintf(pos, end - pos, "[ ");
+    if (res < 0 || (res >= end - pos))
+        goto error;
+
+    pos += res;
+    res = snprintf(pos, end - pos, "%s", (mask & BIT(WIFI_INTERFACE_TYPE_STA)) ? "STA " : "");
+    if (res < 0 || (res >= end - pos))
+        goto error;
+
+    pos += res;
+    res = snprintf(pos, end - pos, "%s", (mask & BIT(WIFI_INTERFACE_TYPE_AP)) ? "AP " : "");
+    if (res < 0 || (res >= end - pos))
+        goto error;
+
+    pos += res;
+    res = snprintf(pos, end - pos, "%s", (mask & BIT(WIFI_INTERFACE_TYPE_P2P)) ? "P2P " : "");
+    if (res < 0 || (res >= end - pos))
+        goto error;
+
+    pos += res;
+    res = snprintf(pos, end - pos, "%s", (mask & BIT(WIFI_INTERFACE_TYPE_NAN)) ? "NAN " : "");
+    if (res < 0 || (res >= end - pos))
+        goto error;
+
+    pos += res;
+    res = snprintf(pos, end - pos, "%s", (mask & BIT(WIFI_INTERFACE_TYPE_AP_BRIDGED)) ? "AP_BRIDGED " : "");
+    if (res < 0 || (res >= end - pos))
+        goto error;
+
+    pos += res;
+    res = snprintf(pos, end - pos, "]");
+    if (res < 0 || (res >= end - pos))
+        goto error;
+
+    return buf;
+
+error:
+    ALOGE("snprintf() error res=%d, write length=%d", res, static_cast<int>(end - pos));
+    return NULL;
+}
+
+static void dump_wifi_iface_combination(wifi_iface_concurrency_matrix *matrix) {
+
+    u32 i, j;
+    wifi_iface_combination *comb;
+    wifi_iface_limit *limit;
+    char buf[30];
+
+    if (matrix == NULL) return;
+
+    ALOGV("--- DUMP Interface Combination ---");
+    ALOGV("num_iface_combinations: %u", matrix->num_iface_combinations);
+    for (i = 0; i < matrix->num_iface_combinations; i++) {
+        comb = &matrix->iface_combinations[i];
+        ALOGV("comb%d : max_ifaces: %u iface_limit: %u", i+1, comb->max_ifaces, comb->num_iface_limits);
+        for (j = 0; j < comb->num_iface_limits; j++) {
+            limit = &comb->iface_limits[j];
+            ALOGV("    max=%u, iface:%s", limit->max_limit, get_iface_mask_str(limit->iface_mask, buf, 30) ? buf : "");
+        }
+    }
+}
+
+
+class GetSupportedIfaceCombinationCmd : public WifiCommand
+{
+private:
+    hal_info *halinfo;
+
+public:
+    GetSupportedIfaceCombinationCmd(wifi_handle handle,
+                                    hal_info *info)
+                                    : WifiCommand(handle, 0),
+                                    halinfo(info) {}
+
+    virtual wifi_error create() {
+        int nl80211_id = genl_ctrl_resolve(mInfo->cmd_sock, "nl80211");
+        wifi_error ret = mMsg.create(nl80211_id, NL80211_CMD_GET_WIPHY, NLM_F_DUMP, 0);
+        mMsg.put_flag(NL80211_ATTR_SPLIT_WIPHY_DUMP);
+
+        return ret;
+    }
+
+    virtual wifi_error requestResponse() {
+        return WifiCommand::requestResponse(mMsg);
+    }
+    virtual wifi_error set_iface_id(const char* name) {
+        unsigned ifindex = if_nametoindex(name);
+        return mMsg.set_iface_id(ifindex);
+    }
+
+    /**
+     * Derive the bridge combinations by adding the bridge interface when combination
+     * has support for more than one AP interface
+     */
+    void derive_bridge_ap_support(wifi_iface_concurrency_matrix* matrix)
+    {
+        if (matrix == NULL)
+            return;
+
+        int i, j, k, num_bridge, rem_ap;
+        int num_bridge_combination = 0;
+        wifi_iface_combination *comb;
+        wifi_iface_limit *limit;
+
+        // Add Support for bridge interface
+        for (i = 0; i < matrix->num_iface_combinations; i++) {
+            comb = &matrix->iface_combinations[i];
+
+            /* find out if this combination has support for AP > 1 */
+            bool bridge_ap_supported = false;
+            for (j = 0; j < comb->num_iface_limits; j++) {
+                limit = &comb->iface_limits[j];
+                if ((limit->iface_mask & BIT(WIFI_INTERFACE_TYPE_AP))
+                        && (limit->max_limit > 1)) {
+                    bridge_ap_supported = true;
+                    break;
+                }
+            }
+            if (bridge_ap_supported) {
+                /* Bridge combination is a new combination along with other type of ifaces */
+                num_bridge_combination++;
+                k = matrix->num_iface_combinations + num_bridge_combination;
+                if (k == MAX_IFACE_COMBINATIONS) {
+                    ALOGE("max iface combination %u limit reached. Stop processing further", k);
+                    break;
+                }
+
+                wifi_iface_combination *comb_br = &matrix->iface_combinations[k-1];
+                num_bridge = 0;
+
+                for (j = 0, k = 0; (j < comb->num_iface_limits) && (k < MAX_IFACE_LIMITS); j++, k++) {
+                    limit = &comb->iface_limits[j];
+                    /* count the possible number of bridge interface based on max_limit/2
+                     * Also maintain remaining interfaces as AP */
+                    if ((limit->iface_mask & BIT(WIFI_INTERFACE_TYPE_AP))
+                           && (limit->max_limit > 1)) {
+                        num_bridge = limit->max_limit / 2;
+                        rem_ap = limit->max_limit % 2;
+                        if (rem_ap) {
+                            comb_br->iface_limits[k].max_limit = rem_ap;
+                            comb_br->iface_limits[k].iface_mask = BIT(WIFI_INTERFACE_TYPE_AP);
+                            k++;
+                        }
+                        if (k < MAX_IFACE_LIMITS) {
+                            comb_br->iface_limits[k].iface_mask = BIT(WIFI_INTERFACE_TYPE_AP_BRIDGED);
+                            comb_br->iface_limits[k].max_limit = num_bridge;
+                        } else {
+                            ALOGE("Can't add more than %d iface limits."
+                                  " Skip adding bridged mode", MAX_IFACE_LIMITS);
+                            break;
+                        }
+                    } else {
+                        // Retain other ifaces in this combination as is
+                        comb_br->iface_limits[k].iface_mask = limit->iface_mask;
+                        comb_br->iface_limits[k].max_limit = limit->max_limit;
+                    }
+                }
+                // Reduce max ifaces which are converted to bridge iface.
+                comb_br->max_ifaces = comb->max_ifaces - num_bridge;
+                comb_br->num_iface_limits = k;
+            }
+        }
+        matrix->num_iface_combinations += num_bridge_combination;
+    }
+
+    virtual int handleResponse(WifiEvent& reply) {
+        struct nlattr **tb = reply.attributes();
+
+        if (tb[NL80211_ATTR_INTERFACE_COMBINATIONS]) {
+            if (halinfo == NULL) {
+                ALOGE("hal_info is NULL. Abort parsing");
+                return NL_SKIP;
+            }
+
+            wifi_iface_concurrency_matrix* matrix = &halinfo->iface_comb_matrix;
+            wifi_iface_combination *iface_combination;
+            wifi_iface_limit *iface_limits;
+            struct nlattr *nl_combi;
+            int rem, i = 0;
+
+            matrix->num_iface_combinations = 0;
+
+            nla_for_each_nested(nl_combi, tb[NL80211_ATTR_INTERFACE_COMBINATIONS], rem) {
+                struct nlattr *tb_comb[NUM_NL80211_IFACE_COMB];
+                struct nlattr *tb_limit[NUM_NL80211_IFACE_LIMIT];
+                struct nlattr *nl_limit, *nl_mode;
+                int err, rem_limit, rem_mode, j = 0;
+                static struct nla_policy
+                iface_combination_policy[NUM_NL80211_IFACE_COMB] = {
+                    [NL80211_IFACE_COMB_LIMITS] = { .type = NLA_NESTED },
+                    [NL80211_IFACE_COMB_MAXNUM] = { .type = NLA_U32 },
+                    [NL80211_IFACE_COMB_STA_AP_BI_MATCH] = { .type = NLA_FLAG },
+                    [NL80211_IFACE_COMB_NUM_CHANNELS] = { .type = NLA_U32 },
+                    [NL80211_IFACE_COMB_RADAR_DETECT_WIDTHS] = { .type = NLA_U32 },
+                },
+                iface_limit_policy[NUM_NL80211_IFACE_LIMIT] = {
+                    [NL80211_IFACE_LIMIT_TYPES] = { .type = NLA_NESTED },
+                    [NL80211_IFACE_LIMIT_MAX] = { .type = NLA_U32 },
+                };
+
+                err = nla_parse_nested(tb_comb, MAX_NL80211_IFACE_COMB,
+                                       nl_combi, iface_combination_policy);
+                if (err || !tb_comb[NL80211_IFACE_COMB_LIMITS] ||
+                    !tb_comb[NL80211_IFACE_COMB_MAXNUM] ||
+                    !tb_comb[NL80211_IFACE_COMB_NUM_CHANNELS]) {
+                        ALOGE("Broken iface combination detected. skip it");
+                        continue; /* broken combination */
+                }
+
+                iface_combination = &matrix->iface_combinations[i];
+                iface_combination->max_ifaces = nla_get_u32(tb_comb[NL80211_IFACE_COMB_MAXNUM]);
+                iface_limits = iface_combination->iface_limits;
+                nla_for_each_nested(nl_limit, tb_comb[NL80211_IFACE_COMB_LIMITS],
+                                    rem_limit) {
+                    if (j == MAX_IFACE_LIMITS) {
+                        ALOGE("Can't parse more than %d iface limits", MAX_IFACE_LIMITS);
+                        continue;
+                    }
+
+                    err = nla_parse_nested(tb_limit, MAX_NL80211_IFACE_LIMIT,
+                                           nl_limit, iface_limit_policy);
+                    if (err || !tb_limit[NL80211_IFACE_LIMIT_TYPES]) {
+                        ALOGE("Broken iface limt types detected. skip it");
+                        continue; /* broken combination */
+                    }
+
+                    iface_limits[j].iface_mask = 0;
+                    iface_limits[j].max_limit = nla_get_u32(tb_limit[NL80211_IFACE_LIMIT_MAX]);
+                    bool is_p2p_go = false, is_p2p_client = false;
+                    nla_for_each_nested(nl_mode,
+                                        tb_limit[NL80211_IFACE_LIMIT_TYPES],
+                                        rem_mode) {
+                        int ift = nla_type(nl_mode);
+                        switch (ift) {
+                        case NL80211_IFTYPE_STATION:
+                            iface_limits[j].iface_mask |= BIT(WIFI_INTERFACE_TYPE_STA);
+                            break;
+                        case NL80211_IFTYPE_P2P_GO:
+                            is_p2p_go = true;
+                            iface_limits[j].iface_mask |= BIT(WIFI_INTERFACE_TYPE_P2P);
+                            break;
+                        case NL80211_IFTYPE_P2P_CLIENT:
+                            is_p2p_client = true;
+                            iface_limits[j].iface_mask |= BIT(WIFI_INTERFACE_TYPE_P2P);
+                            break;
+                        case NL80211_IFTYPE_AP:
+                            iface_limits[j].iface_mask |= BIT(WIFI_INTERFACE_TYPE_AP);
+                            break;
+                        case NL80211_IFTYPE_NAN:
+                            iface_limits[j].iface_mask |= BIT(WIFI_INTERFACE_TYPE_NAN);
+                            break;
+                        case NL80211_IFTYPE_P2P_DEVICE:
+                            ALOGI("Ignore p2p_device iface type");
+                            iface_limits[j].max_limit--;
+                            break;
+                        default:
+                            ALOGI("Ignore unsupported iface type: %d", ift);
+                            break;
+                        }
+                    }
+                    // Remove P2P if both client/Go are not set.
+                    if ((iface_limits[j].iface_mask & BIT(WIFI_INTERFACE_TYPE_P2P))
+                            && (!is_p2p_client || !is_p2p_go))
+                        iface_limits[j].iface_mask &= ~BIT(WIFI_INTERFACE_TYPE_P2P);
+
+                    // Ignore Unsupported Ifaces (ex Monitor interface)
+                    if (iface_limits[j].iface_mask)
+                        j++;
+                }
+                iface_combination->num_iface_limits = j;
+                i++;
+                if (i == MAX_IFACE_COMBINATIONS) {
+                    ALOGE("%s max iface combination %u limit reached. Stop processing further", __func__, i);
+                    break;
+                }
+            }
+            matrix->num_iface_combinations = i;
+            derive_bridge_ap_support(matrix);
+        }
+        return NL_SKIP;
+    }
+};
+
+wifi_error wifi_get_supported_iface_combination(wifi_interface_handle iface_handle)
+{
+    wifi_error ret;
+    wifi_handle handle = getWifiHandle(iface_handle);
+    hal_info *info = (hal_info *) handle;
+    interface_info *iface_info = getIfaceInfo(iface_handle);
+
+    GetSupportedIfaceCombinationCmd cmd(handle, info);
+
+    ret = cmd.create();
+    if (ret != WIFI_SUCCESS) {
+        ALOGE("%s: create command failed", __func__);
+        return WIFI_ERROR_UNKNOWN;
+    }
+
+    ret = cmd.set_iface_id(iface_info->name);
+    if (ret != WIFI_SUCCESS) {
+        ALOGE("%s: set iface id failed", __func__);
+        return WIFI_ERROR_UNKNOWN;
+    }
+
+    ret = cmd.requestResponse();
+    if (ret != WIFI_SUCCESS) {
+        ALOGE("Failed to query supported iface combination, ret=%d", ret);
+        return WIFI_ERROR_UNKNOWN;
+    }
+
+    dump_wifi_iface_combination(&info->iface_comb_matrix);
+
+    return ret;
+}
+#endif /* TARGET_SUPPORTS_WEARABLES */
+
 wifi_error wifi_get_radar_history(wifi_interface_handle handle,
        radar_history_result *resultBuf, int resultBufSize, int *numResults)
 {
@@ -3484,3 +3928,40 @@ cleanup:
     delete vCommand;
     return ret;
 }
+
+#ifndef TARGET_SUPPORTS_WEARABLES
+wifi_error wifi_get_supported_iface_concurrency_matrix(
+        wifi_handle handle, wifi_iface_concurrency_matrix *iface_comb_matrix)
+{
+    wifi_error ret = WIFI_ERROR_UNKNOWN;
+    hal_info *info = (hal_info *) handle;
+    wifi_iface_combination *comb;
+    wifi_iface_limit *limit;
+
+    if (info == NULL) {
+        ALOGE("Wifi not initialized yet.");
+        return ret;
+    }
+
+    if (iface_comb_matrix == NULL) {
+        ALOGE("Interface combination matrix not initialized.");
+        return ret;
+    }
+
+    ALOGI("Get supported concurrency capabilities");
+    // Copy over from info to input param.
+    iface_comb_matrix->num_iface_combinations =
+            info->iface_comb_matrix.num_iface_combinations;
+    for (int i = 0; i < iface_comb_matrix->num_iface_combinations; i++) {
+        comb = &iface_comb_matrix->iface_combinations[i];
+        comb->max_ifaces = info->iface_comb_matrix.iface_combinations[i].max_ifaces;
+        comb->num_iface_limits = info->iface_comb_matrix.iface_combinations[i].num_iface_limits;
+        for (int j = 0; j < comb->num_iface_limits; j++) {
+            limit = &comb->iface_limits[j];
+            limit->max_limit = info->iface_comb_matrix.iface_combinations[i].iface_limits[j].max_limit;
+            limit->iface_mask = info->iface_comb_matrix.iface_combinations[i].iface_limits[j].iface_mask;
+        }
+    }
+    return WIFI_SUCCESS;
+}
+#endif /* TARGET_SUPPORTS_WEARABLES */

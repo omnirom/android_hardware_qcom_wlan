@@ -27,7 +27,7 @@
 
  * Changes from Qualcomm Innovation Center are provided under the following license:
 
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -51,6 +51,7 @@ TdlsCommand::TdlsCommand(wifi_handle handle, int id, u32 vendor_id, u32 subcmd)
     memset(&mHandler, 0, sizeof(mHandler));
     memset(&mTDLSgetStatusRspParams, 0, sizeof(wifi_tdls_status));
     mRequestId = 0;
+    memset(&mTDLSgetCaps, 0, sizeof(wifiTdlsCapabilities));
 }
 
 TdlsCommand::~TdlsCommand()
@@ -122,9 +123,15 @@ int TdlsCommand::handleEvent(WifiEvent &event)
                             __FUNCTION__);
                     return WIFI_ERROR_INVALID_ARGS;
                 }
+                if (nla_len(tb_vendor[QCA_WLAN_VENDOR_ATTR_TDLS_MAC_ADDR]) != sizeof(mac_addr))
+                {
+                    ALOGE("%s: QCA_WLAN_VENDOR_ATTR_TDLS_MAC_ADDR Invalid mac addr lenght",
+                            __FUNCTION__);
+                    return WIFI_ERROR_INVALID_ARGS;
+                }
                 memcpy(addr,
                   (u8 *)nla_data(tb_vendor[QCA_WLAN_VENDOR_ATTR_TDLS_MAC_ADDR]),
-                  nla_len(tb_vendor[QCA_WLAN_VENDOR_ATTR_TDLS_MAC_ADDR]));
+                  sizeof(mac_addr));
 
                 ALOGV(MAC_ADDR_STR, MAC_ADDR_ARRAY(addr));
 
